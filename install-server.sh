@@ -136,6 +136,15 @@ detect_os() {
     fi
 }
 
+# Function to get docker compose command
+get_docker_compose_cmd() {
+    if command -v docker-compose &> /dev/null; then
+        echo "docker-compose"
+    else
+        echo "docker compose"
+    fi
+}
+
 # Function to check system requirements
 check_requirements() {
     local os_type="$1"
@@ -156,7 +165,7 @@ check_requirements() {
     fi
     
     # Check Docker Compose
-    if ! command -v docker-compose &> /dev/null; then
+    if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
         print_error "Docker Compose is required but not installed"
         print_status "Please install Docker Compose: https://docs.docker.com/compose/install/"
         exit 1
@@ -275,15 +284,17 @@ setup_database() {
     
     cd "$install_dir"
     
+    local compose_cmd=$(get_docker_compose_cmd)
+    
     if [ "$db_type" = "postgresql" ]; then
         print_status "Starting PostgreSQL container..."
-        docker-compose up -d postgres
+        $compose_cmd up -d postgres
         
         print_status "Waiting for PostgreSQL to be ready..."
         sleep 10
         
         print_status "Running database migrations..."
-        docker-compose run --rm api alembic upgrade head
+        $compose_cmd run --rm api alembic upgrade head
         
         print_success "Database setup complete"
     elif [ "$db_type" = "sqlite" ]; then
@@ -298,19 +309,20 @@ start_services() {
     print_status "Starting QwarkTracker services..."
     
     cd "$install_dir"
+    local compose_cmd=$(get_docker_compose_cmd)
     
     # Start all services
-    docker-compose up -d
+    $compose_cmd up -d
     
     print_status "Waiting for services to start..."
     sleep 15
     
     # Check if services are running
-    if docker-compose ps | grep -q "Up"; then
+    if $compose_cmd ps | grep -q "Up"; then
         print_success "QwarkTracker services started successfully!"
         echo ""
         echo "Service Status:"
-        docker-compose ps
+        $compose_cmd ps
         echo ""
         echo "Access URLs:"
         echo "  Web Interface: http://localhost:3000"
@@ -322,12 +334,12 @@ start_services() {
         echo "  Password: admin123"
         echo ""
         echo "Management Commands:"
-        echo "  View logs: docker-compose logs -f"
-        echo "  Stop services: docker-compose down"
-        echo "  Restart services: docker-compose restart"
+        echo "  View logs: $compose_cmd logs -f"
+        echo "  Stop services: $compose_cmd down"
+        echo "  Restart services: $compose_cmd restart"
     else
         print_error "Failed to start services"
-        docker-compose logs
+        $compose_cmd logs
         exit 1
     fi
 }
@@ -539,14 +551,16 @@ main() {
         echo ""
         print_status "To manage the server:"
         echo "  cd $install_dir"
-        echo "  docker-compose logs -f     # View logs"
-        echo "  docker-compose restart     # Restart services"
-        echo "  docker-compose down         # Stop services"
+        local compose_cmd=$(get_docker_compose_cmd)
+        echo "  $compose_cmd logs -f     # View logs"
+        echo "  $compose_cmd restart     # Restart services"
+        echo "  $compose_cmd down         # Stop services"
     else
         print_success "QwarkTracker server installation complete!"
         print_status "To start the server manually:"
         echo "  cd $install_dir"
-        echo "  docker-compose up -d"
+        local compose_cmd=$(get_docker_compose_cmd)
+        echo "  $compose_cmd up -d"
     fi
 }
 
