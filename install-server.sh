@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# QwarkTracker Server Auto-Installation Script
-# Supports Linux, macOS, and Windows (via WSL)
+# QwarkTracker Server Manual Installation Script (No Docker)
+# For systems without Docker - installs directly with Python
 
 set -e
 
@@ -14,17 +14,10 @@ NC='\033[0m' # No Color
 
 # Default configuration
 DEFAULT_INSTALL_DIR="/opt/qwarktracker"
-DEFAULT_SERVICE_USER="root"
 DEFAULT_SERVER_PORT="8000"
 DEFAULT_WEB_PORT="3000"
-DEFAULT_DB_TYPE="postgresql"
-DEFAULT_DB_HOST="localhost"
-DEFAULT_DB_PORT="5432"
-DEFAULT_DB_NAME="qwarktracker"
-DEFAULT_DB_USER="qwarktracker"
-DEFAULT_DB_PASSWORD="qwarktracker123"
-DEFAULT_REDIS_HOST="localhost"
-DEFAULT_REDIS_PORT="6379"
+DEFAULT_DB_TYPE="sqlite"
+DEFAULT_DB_NAME="qwarktracker.db"
 DEFAULT_SERVER_PACKAGE="https://raw.githubusercontent.com/bowser-2077/CascadeMC/refs/heads/main/server.zip"
 
 # Function to print colored output
@@ -56,7 +49,6 @@ download_server_package() {
         local download_url="$package_url"
         local filename=$(basename "$package_url")
     else
-        # Otherwise, treat it as relative to server
         local download_url="${base_url}/${package_url}"
         local filename="$package_url"
     fi
@@ -114,7 +106,7 @@ download_server_package() {
 check_local_files() {
     print_status "Checking for local server files..."
     
-    if [ -f "server/app/main.py" ] && [ -f "docker-compose.yml" ] && [ -f "start.sh" ]; then
+    if [ -f "server/app/main.py" ] && [ -f "start.sh" ]; then
         print_success "Local server files found"
         return 0
     else
@@ -136,15 +128,6 @@ detect_os() {
     fi
 }
 
-# Function to get docker compose command
-get_docker_compose_cmd() {
-    if command -v docker-compose &> /dev/null; then
-        echo "docker-compose"
-    else
-        echo "docker compose"
-    fi
-}
-
 # Function to check system requirements
 check_requirements() {
     local os_type="$1"
@@ -154,79 +137,94 @@ check_requirements() {
     # Check Python
     if ! command -v python3 &> /dev/null; then
         print_error "Python 3 is required but not installed"
+        print_status "Please install Python 3: https://www.python.org/downloads/"
         exit 1
     fi
     
-    # Check Docker
-    if ! command -v docker &> /dev/null; then
-        print_error "Docker is required but not installed"
-        print_status "Please install Docker: https://docs.docker.com/get-docker/"
+    # Check pip
+    if ! command -v pip3 &> /dev/null && ! python3 -m pip --version &> /dev/null; then
+        print_error "pip is required but not installed"
+        print_status "Please install pip: https://pip.pypa.io/en/stable/installation/"
         exit 1
     fi
     
-    # Check Docker Compose
-    if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-        print_error "Docker Compose is required but not installed"
-        print_status "Please install Docker Compose: https://docs.docker.com/compose/install/"
-        exit 1
+    # Check Node.js (for web interface)
+    if ! command -v node &> /dev/null; then
+        print_warning "Node.js is recommended for web interface but not installed"
+        print_status "Please install Node.js: https://nodejs.org/"
+        print_status "Or use the API-only mode"
     fi
     
     print_success "System requirements met"
 }
 
-# Function to install system dependencies
-install_dependencies() {
-    local os_type="$1"
+# Function to install Python dependencies
+install_python_deps() {
+    local install_dir="$1"
     
-    print_status "Installing system dependencies..."
+    print_status "Installing Python dependencies..."
     
-    case "$os_type" in
-        "linux")
-            # Check if running as root
-            if [ "$EUID" -ne 0 ]; then
-                print_warning "This script requires root privileges for Docker operations."
-                print_warning "Running with sudo..."
-                sudo "$0" "$@"
-                exit $?
-            fi
-            
-            # Install git if not present
-            if ! command -v git &> /dev/null; then
-                print_status "Installing git..."
-                apt-get update && apt-get install -y git
-            fi
-            ;;
-        "macos")
-            # Install git if not present
-            if ! command -v git &> /dev/null; then
-                print_status "Installing git..."
-                xcode-select --install 2>/dev/null || true
-            fi
-            ;;
-        "windows")
-            print_warning "Please ensure Git for Windows is installed"
-            ;;
-        *)
-            print_warning "Unknown OS, skipping dependency installation"
-            ;;
-    esac
+    # Check if server directory exists
+    if [ ! -d "$install_dir/server" ]; then
+        print_error "Server directory not found in $install_dir"
+        print_status "Available directories:"
+        ls -la "$install_dir"
+        exit 1
+    fi
     
-    print_success "Dependencies installed"
+    cd "$install_dir/server"
+    
+    # Install server dependencies
+    if python3 -m pip install -r requirements.txt; then
+        print_success "Python dependencies installed"
+    else
+        print_error "Failed to install Python dependencies"
+        exit 1
+    fi
+}
+
+# Function to setup database
+setup_database() {
+    local install_dir="$1"
+    local db_type="$2"
+    local db_name="$3"
+    
+    print_status "Setting up database..."
+    
+    cd "$install_dir"
+    
+    if [ "$db_type" = "sqlite" ]; then
+        print_status "Setting up SQLite database..."
+        
+        # Create database directory
+        mkdir -p data
+        
+        # Initialize database
+        if [ -f "database/schema.sql" ]; then
+            sqlite3 "data/$db_name" < database/schema.sql
+            print_success "SQLite database initialized"
+        else
+            print_warning "Database schema not found, will be created automatically"
+        fi
+        
+    elif [ "$db_type" = "postgresql" ]; then
+        print_status "PostgreSQL setup requires manual configuration:"
+        echo "  1. Install PostgreSQL: sudo apt-get install postgresql postgresql-contrib"
+        echo "  2. Create database: createdb qwarktracker"
+        echo "  3. Create user: createuser qwarktracker"
+        echo "  4. Set password: psql -c \"ALTER USER qwarktracker PASSWORD 'your_password';\""
+        echo "  5. Import schema: psql -U qwarktracker -d qwarktracker < database/schema.sql"
+        print_warning "Please complete PostgreSQL setup manually"
+    fi
 }
 
 # Function to create environment file
 create_env_file() {
     local install_dir="$1"
     local db_type="$2"
-    local db_host="$3"
-    local db_port="$4"
-    local db_name="$5"
-    local db_user="$6"
-    local db_password="$7"
-    local redis_host="$8"
-    local redis_port="$9"
-    local server_port="${10}"
-    local web_port="${11}"
+    local db_name="$3"
+    local server_port="$4"
+    local web_port="$5"
     
     print_status "Creating environment configuration..."
     
@@ -236,16 +234,15 @@ create_env_file() {
     local secret_key=$(openssl rand -hex 32 2>/dev/null || date +%s | sha256sum | base64 | head -c 32)
     
     cat > "$env_file" << EOF
-# QwarkTracker Server Configuration
-DATABASE_URL=${db_type}://${db_user}:${db_password}@${db_host}:${db_port}/${db_name}
+# QwarkTracker Server Configuration (Manual Installation)
+DATABASE_URL=${db_type}:///$(pwd)/data/${db_name}
 SECRET_KEY=${secret_key}
-REDIS_URL=redis://${redis_host}:${redis_port}
 
 # API Configuration
 API_HOST=0.0.0.0
 API_PORT=${server_port}
-API_RELOAD=false
-API_WORKERS=4
+API_RELOAD=true
+API_WORKERS=1
 
 # Web Configuration
 WEB_HOST=0.0.0.0
@@ -267,111 +264,68 @@ SMTP_USERNAME=
 SMTP_PASSWORD=
 SMTP_FROM_EMAIL=
 
-# Celery
-CELERY_BROKER_URL=redis://${redis_host}:${redis_port}/0
-CELERY_RESULT_BACKEND=redis://${redis_host}:${redis_port}/0
+# Redis (optional - for production)
+REDIS_URL=redis://localhost:6379
+
+# Celery (optional - for production)
+CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_RESULT_BACKEND=redis://localhost:6379/0
 EOF
 
     print_success "Environment file created at $env_file"
 }
 
-# Function to setup database
-setup_database() {
+# Function to create startup scripts
+create_startup_scripts() {
     local install_dir="$1"
-    local db_type="$2"
+    local server_port="$2"
+    local web_port="$3"
     
-    print_status "Setting up database..."
+    print_status "Creating startup scripts..."
     
-    cd "$install_dir"
-    
-    local compose_cmd=$(get_docker_compose_cmd)
-    
-    if [ "$db_type" = "postgresql" ]; then
-        print_status "Starting PostgreSQL container..."
-        $compose_cmd up -d postgres
-        
-        print_status "Waiting for PostgreSQL to be ready..."
-        sleep 10
-        
-        print_status "Running database migrations..."
-        $compose_cmd run --rm api alembic upgrade head
-        
-        print_success "Database setup complete"
-    elif [ "$db_type" = "sqlite" ]; then
-        print_status "Using SQLite database (no setup required)"
-    fi
-}
+    # Create server startup script
+    cat > "$install_dir/start-server.sh" << 'EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+export $(cat .env | xargs)
+cd server
+python3 -m uvicorn app.main:app --host $API_HOST --port $API_PORT --reload
+EOF
 
-# Function to start services
-start_services() {
-    local install_dir="$1"
-    
-    print_status "Starting QwarkTracker services..."
-    
-    cd "$install_dir"
-    local compose_cmd=$(get_docker_compose_cmd)
-    
-    # Start all services
-    $compose_cmd up -d
-    
-    print_status "Waiting for services to start..."
-    sleep 15
-    
-    # Check if services are running
-    if $compose_cmd ps | grep -q "Up"; then
-        print_success "QwarkTracker services started successfully!"
-        echo ""
-        echo "Service Status:"
-        $compose_cmd ps
-        echo ""
-        echo "Access URLs:"
-        echo "  Web Interface: http://localhost:3000"
-        echo "  API: http://localhost:8000"
-        echo "  API Docs: http://localhost:8000/docs"
-        echo ""
-        echo "Default Login:"
-        echo "  Username: admin"
-        echo "  Password: admin123"
-        echo ""
-        echo "Management Commands:"
-        echo "  View logs: $compose_cmd logs -f"
-        echo "  Stop services: $compose_cmd down"
-        echo "  Restart services: $compose_cmd restart"
-    else
-        print_error "Failed to start services"
-        $compose_cmd logs
-        exit 1
+    # Create web startup script (if Node.js available)
+    if command -v node &> /dev/null; then
+        cat > "$install_dir/start-web.sh" << 'EOF'
+#!/bin/bash
+cd "$(dirname "$0")/web"
+npm start
+EOF
+        chmod +x "$install_dir/start-web.sh"
     fi
+    
+    chmod +x "$install_dir/start-server.sh"
+    print_success "Startup scripts created"
 }
 
 # Function to test installation
 test_installation() {
     local server_port="$1"
-    local web_port="$2"
     
     print_status "Testing installation..."
     
-    # Wait a bit more for services to be fully ready
-    sleep 10
+    # Wait a bit for server to start
+    sleep 5
     
     # Test API
     if curl -s -f "http://localhost:${server_port}/health" > /dev/null 2>&1; then
         print_success "API is responding"
     else
-        print_warning "API not yet responding (may still be starting)"
-    fi
-    
-    # Test Web
-    if curl -s -f "http://localhost:${web_port}" > /dev/null 2>&1; then
-        print_success "Web interface is responding"
-    else
-        print_warning "Web interface not yet responding (may still be starting)"
+        print_warning "API not yet responding (may need manual start)"
     fi
 }
 
 # Function to show usage
 usage() {
-    echo "QwarkTracker Server Installation Script"
+    echo "QwarkTracker Server Manual Installation Script (No Docker)"
     echo ""
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -379,23 +333,17 @@ usage() {
     echo "  -d, --dir DIR          Installation directory (default: $DEFAULT_INSTALL_DIR)"
     echo "  --server-port PORT     API server port (default: $DEFAULT_SERVER_PORT)"
     echo "  --web-port PORT        Web interface port (default: $DEFAULT_WEB_PORT)"
-    echo "  --db-type TYPE         Database type: postgresql, sqlite (default: $DEFAULT_DB_TYPE)"
-    echo "  --db-host HOST         Database host (default: $DEFAULT_DB_HOST)"
-    echo "  --db-port PORT         Database port (default: $DEFAULT_DB_PORT)"
+    echo "  --db-type TYPE         Database type: sqlite, postgresql (default: $DEFAULT_DB_TYPE)"
     echo "  --db-name NAME         Database name (default: $DEFAULT_DB_NAME)"
-    echo "  --db-user USER         Database user (default: $DEFAULT_DB_USER)"
-    echo "  --db-password PASS     Database password (default: $DEFAULT_DB_PASSWORD)"
-    echo "  --redis-host HOST      Redis host (default: $DEFAULT_REDIS_HOST)"
-    echo "  --redis-port PORT      Redis port (default: $DEFAULT_REDIS_PORT)"
-    echo "  --package URL           Server package URL (default: $DEFAULT_SERVER_PACKAGE)"
+    echo "  --package URL          Server package URL (default: $DEFAULT_SERVER_PACKAGE)"
     echo "  --no-start             Don't start services after installation"
     echo "  -h, --help             Show this help message"
     echo ""
     echo "Examples:"
     echo "  $0                                              # Basic installation"
     echo "  $0 --dir /home/qwarktracker --web-port 8080   # Custom directory and web port"
-    echo "  $0 --db-type sqlite                           # Use SQLite instead of PostgreSQL"
-    echo "  $0 --package https://example.com/server.zip   # Custom package URL"
+    echo "  $0 --db-type postgresql                       # Use PostgreSQL"
+    echo "  $0 --package https://example.com/server.zip     # Custom package URL"
 }
 
 # Main installation function
@@ -404,13 +352,7 @@ main() {
     local server_port="$DEFAULT_SERVER_PORT"
     local web_port="$DEFAULT_WEB_PORT"
     local db_type="$DEFAULT_DB_TYPE"
-    local db_host="$DEFAULT_DB_HOST"
-    local db_port="$DEFAULT_DB_PORT"
     local db_name="$DEFAULT_DB_NAME"
-    local db_user="$DEFAULT_DB_USER"
-    local db_password="$DEFAULT_DB_PASSWORD"
-    local redis_host="$DEFAULT_REDIS_HOST"
-    local redis_port="$DEFAULT_REDIS_PORT"
     local server_package="$DEFAULT_SERVER_PACKAGE"
     local no_start=false
     
@@ -433,32 +375,8 @@ main() {
                 db_type="$2"
                 shift 2
                 ;;
-            --db-host)
-                db_host="$2"
-                shift 2
-                ;;
-            --db-port)
-                db_port="$2"
-                shift 2
-                ;;
             --db-name)
                 db_name="$2"
-                shift 2
-                ;;
-            --db-user)
-                db_user="$2"
-                shift 2
-                ;;
-            --db-password)
-                db_password="$2"
-                shift 2
-                ;;
-            --redis-host)
-                redis_host="$2"
-                shift 2
-                ;;
-            --redis-port)
-                redis_port="$2"
                 shift 2
                 ;;
             --package)
@@ -481,7 +399,7 @@ main() {
         esac
     done
     
-    print_status "QwarkTracker Server Installation"
+    print_status "QwarkTracker Server Manual Installation"
     print_status "Installation Directory: $install_dir"
     print_status "Server Port: $server_port"
     print_status "Web Port: $web_port"
@@ -495,16 +413,26 @@ main() {
     # Check requirements
     check_requirements "$os_type"
     
-    # Install dependencies
-    install_dependencies "$os_type"
-    
     # Create installation directory
     print_status "Creating installation directory..."
     if [ "$os_type" = "linux" ]; then
-        sudo mkdir -p "$install_dir"
-        sudo chown $USER:$USER "$install_dir"
+        if [ "$EUID" -ne 0 ]; then
+            print_warning "This script requires root privileges for installation directory creation."
+            print_warning "Running with sudo..."
+            sudo "$0" "$@"
+            exit $?
+        else
+            mkdir -p "$install_dir"
+            chown $USER:$USER "$install_dir"
+        fi
     else
         mkdir -p "$install_dir"
+    fi
+    
+    # Verify directory was created
+    if [ ! -d "$install_dir" ]; then
+        print_error "Failed to create installation directory: $install_dir"
+        exit 1
     fi
     
     # Handle server files - try download first, then local copy
@@ -513,6 +441,8 @@ main() {
     # First try to download from GitHub
     if download_server_package "$install_dir" "$server_package"; then
         print_success "Server files downloaded and extracted from GitHub"
+        print_status "Contents of installation directory:"
+        ls -la "$install_dir"
     else
         # Fallback to local files if available
         if check_local_files; then
@@ -529,38 +459,62 @@ main() {
     
     cd "$install_dir"
     
-    # Create environment file
-    create_env_file "$install_dir" "$db_type" "$db_host" "$db_port" "$db_name" "$db_user" "$db_password" "$redis_host" "$redis_port" "$server_port" "$web_port"
+    # Install Python dependencies
+    install_python_deps "$install_dir"
     
     # Setup database
-    setup_database "$install_dir" "$db_type"
+    setup_database "$install_dir" "$db_type" "$db_name"
+    
+    # Create environment file
+    create_env_file "$install_dir" "$db_type" "$db_name" "$server_port" "$web_port"
+    
+    # Create startup scripts
+    create_startup_scripts "$install_dir" "$server_port" "$web_port"
     
     # Start services unless disabled
     if [ "$no_start" = false ]; then
-        start_services "$install_dir"
+        print_status "Starting QwarkTracker server..."
+        
+        # Start server in background
+        cd "$install_dir"
+        ./start-server.sh &
+        SERVER_PID=$!
+        
+        print_success "QwarkTracker server started with PID: $SERVER_PID"
         
         # Test installation
-        test_installation "$server_port" "$web_port"
+        test_installation "$server_port"
         
         print_success "QwarkTracker server installation complete!"
         echo ""
-        print_status "Next steps:"
-        echo "  1. Access the web interface at http://localhost:${web_port}"
-        echo "  2. Login with admin/admin123"
-        echo "  3. Start installing clients on your devices"
+        print_status "Access URLs:"
+        echo "  API: http://localhost:${server_port}"
+        echo "  API Docs: http://localhost:${server_port}/docs"
         echo ""
-        print_status "To manage the server:"
-        echo "  cd $install_dir"
-        local compose_cmd=$(get_docker_compose_cmd)
-        echo "  $compose_cmd logs -f     # View logs"
-        echo "  $compose_cmd restart     # Restart services"
-        echo "  $compose_cmd down         # Stop services"
+        print_status "Default Login:"
+        echo "  Username: admin"
+        echo "  Password: admin123"
+        echo ""
+        print_status "Management Commands:"
+        echo "  Start server: cd $install_dir && ./start-server.sh"
+        echo "  Stop server: kill $SERVER_PID"
+        echo "  View logs: tail -f server.log"
+        
+        if command -v node &> /dev/null; then
+            echo ""
+            print_status "Web Interface:"
+            echo "  Start web: cd $install_dir && ./start-web.sh"
+            echo "  Web URL: http://localhost:${web_port}"
+        else
+            echo ""
+            print_warning "Web interface requires Node.js installation"
+            print_status "Install Node.js: https://nodejs.org/"
+        fi
     else
         print_success "QwarkTracker server installation complete!"
         print_status "To start the server manually:"
         echo "  cd $install_dir"
-        local compose_cmd=$(get_docker_compose_cmd)
-        echo "  $compose_cmd up -d"
+        echo "  ./start-server.sh"
     fi
 }
 
